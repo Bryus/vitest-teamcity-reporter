@@ -4,7 +4,7 @@
   "description": "A TeamCity reporter for vitest.",
   "repository": {
     "type": "git",
-    "url": "https://github.com/bryus/vitest-teamcity-reporter"
+    "url": "git+https://github.com/bryus/vitest-teamcity-reporter.git"
   },
   "keywords": [
     "vitest",
