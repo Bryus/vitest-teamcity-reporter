@@ -6,98 +6,37 @@ import { escapeSpecials } from './escape'
 import { SuiteMessage } from './messages/suite-message'
 import { TestMessage } from './messages/test-message'
 
+/**
+ * Renders every test module as one atomic block when the module finishes.
+ *
+ * Vitest 4 dispatches reporter callbacks in batches, so streaming messages
+ * from onTestCaseReady/onTestCaseResult interleaves testStarted/testFinished
+ * of different tests inside one flow, can lose the trailing testFinished and
+ * closes suites out of order or under a different name — TeamCity then
+ * miscounts tests. Rendering from the final task tree makes the sequence
+ * correct by construction: tree order, every testStarted immediately paired
+ * with its testFinished, suites opened and closed with the same name.
+ */
 export class Printer {
   private readonly testConsoleMap = new Map<string, UserConsoleLog[]>()
-  private readonly reportedSuites = new Set<string>()
-  private readonly startedTests = new Set<string>()
+  private readonly flushedModules = new Set<string>()
 
   constructor(private readonly logger: Vitest['logger']) {}
 
-  public onModuleCollected(testModule: TestModule): void {
-    const suiteMessage = new SuiteMessage(testModule.moduleId, escapeSpecials(testModule.relativeModuleId))
-    this.log(suiteMessage.started())
-    this.reportedSuites.add(testModule.moduleId)
-  }
-
-  public onSuiteReady(testSuite: TestSuite): void {
-    if (this.isSkippedOrTodo(testSuite)) {
-      return
-    }
-    const suiteMessage = new SuiteMessage(testSuite.module.moduleId, escapeSpecials(testSuite.name))
-    this.log(suiteMessage.started())
-    this.reportedSuites.add(testSuite.id)
-  }
-
-  public onTestReady(testCase: TestCase): void {
-    if (!this.isTestInReportedSuite(testCase)) {
-      return
-    }
-    if (testCase.result().state === 'skipped') {
-      const testMessage = new TestMessage(testCase)
-      this.log(testMessage.ignored())
-      return
-    }
-    const testMessage = new TestMessage(testCase)
-    this.log(testMessage.started())
-    this.startedTests.add(testCase.id)
-  }
-
-  public onTestResult(testCase: TestCase): void {
-    if (!this.isTestInReportedSuite(testCase)) {
-      return
-    }
-    if (this.isSkippedOrTodo(testCase)) {
-      return
-    }
-
-    const testMessage = new TestMessage(testCase)
-
-    // If testStarted wasn't called (e.g., due to hook failure), emit it now
-    if (!this.startedTests.has(testCase.id)) {
-      this.log(testMessage.started())
-    }
-    this.startedTests.delete(testCase.id)
-
-    const result = testCase.result()
-
-    const logs = this.testConsoleMap.get(testCase.id) ?? []
-    logs.forEach((log) => {
-      this.log(testMessage.log(log.type, log.content))
-    })
-    this.testConsoleMap.delete(testCase.id)
-
-    // Check for errors even if state is not 'failed' (e.g., hook failures)
-    const errors = this.getTestErrors(testCase)
-    const hasRealErrors = errors.length > 0 && !(errors[0] instanceof MissingResultError)
-
-    if (result.state === 'failed' || (result.state !== 'passed' && hasRealErrors)) {
-      errors.forEach((error) => {
-        this.log(testMessage.fail(error))
-      })
-    } else if (hasRealErrors) {
-      // Passed after retry: the run is green, so emitting testFailed would wrongly
-      // fail the TeamCity build. Keep a trace of the flake in stderr instead.
-      const attempts = errors.length
-      this.log(testMessage.stdErr(`flaky: passed after retry (${attempts} failed attempt${attempts === 1 ? '' : 's'})`))
-    }
-
-    const diagnostic = testCase.diagnostic()
-    this.log(testMessage.finished(diagnostic?.duration ?? 0))
-  }
-
-  public onSuiteResult(testSuite: TestSuite): void {
-    if (this.isSkippedOrTodo(testSuite)) {
-      return
-    }
-    const suiteMessage = new SuiteMessage(testSuite.module.moduleId, escapeSpecials(testSuite.name))
-    this.log(suiteMessage.finished())
-    this.reportedSuites.delete(testSuite.id)
-  }
-
   public onModuleEnd(testModule: TestModule): void {
-    const suiteMessage = new SuiteMessage(testModule.moduleId, escapeSpecials(testModule.moduleId))
-    this.log(suiteMessage.finished())
-    this.reportedSuites.delete(testModule.moduleId)
+    this.flushModule(testModule, true)
+  }
+
+  /**
+   * Fallback for modules that never reported onTestModuleEnd (the run was
+   * interrupted or a test hung): flush what is known so TeamCity still sees
+   * their finished tests, and fail the ones without a result to point at
+   * the place where the run stopped.
+   */
+  public onRunEnd(testModules: ReadonlyArray<TestModule>): void {
+    testModules.forEach((testModule) => {
+      this.flushModule(testModule, false)
+    })
   }
 
   public addTestConsoleLog(id: string, log: UserConsoleLog): void {
@@ -109,6 +48,79 @@ export class Printer {
     }
   }
 
+  private flushModule(testModule: TestModule, complete: boolean): void {
+    if (this.flushedModules.has(testModule.moduleId)) {
+      return
+    }
+    this.flushedModules.add(testModule.moduleId)
+    const suiteMessage = new SuiteMessage(testModule.moduleId, escapeSpecials(testModule.relativeModuleId))
+    this.log(suiteMessage.started())
+    for (const child of testModule.children) {
+      this.render(child, complete)
+    }
+    this.log(suiteMessage.finished())
+  }
+
+  private render(item: TestCase | TestSuite, complete: boolean): void {
+    if (item.type === 'suite') {
+      if (this.isSkippedOrTodo(item)) {
+        return
+      }
+      const suiteMessage = new SuiteMessage(item.module.moduleId, escapeSpecials(item.name))
+      this.log(suiteMessage.started())
+      for (const child of item.children) {
+        this.render(child, complete)
+      }
+      this.log(suiteMessage.finished())
+      return
+    }
+    this.renderTest(item, complete)
+  }
+
+  private renderTest(testCase: TestCase, complete: boolean): void {
+    const testMessage = new TestMessage(testCase)
+    const result = testCase.result()
+
+    if (this.isSkippedOrTodo(testCase)) {
+      this.log(testMessage.ignored())
+      return
+    }
+
+    // Check for errors even if state is not 'failed': a failed hook marks its
+    // tests as skipped, yet they must be reported as failures, not ignores.
+    const errors = this.getTestErrors(testCase)
+    const hasRealErrors = errors.length > 0 && !(errors[0] instanceof MissingResultError)
+
+    if (result.state === 'skipped' && !hasRealErrors) {
+      this.log(testMessage.ignored())
+      return
+    }
+
+    this.log(testMessage.started())
+
+    const logs = this.testConsoleMap.get(testCase.id) ?? []
+    logs.forEach((log) => {
+      this.log(testMessage.log(log.type, log.content))
+    })
+    this.testConsoleMap.delete(testCase.id)
+
+    if (!complete && result.state === 'pending' && !hasRealErrors) {
+      // Interrupted run: the test never produced a result.
+      this.log(testMessage.fail(new MissingResultError(testCase)))
+    } else if (result.state === 'failed' || (result.state !== 'passed' && hasRealErrors)) {
+      errors.forEach((error) => {
+        this.log(testMessage.fail(error))
+      })
+    } else if (hasRealErrors) {
+      // Passed after retry: the run is green, so emitting testFailed would wrongly
+      // fail the TeamCity build. Keep a trace of the flake in stderr instead.
+      const attempts = errors.length
+      this.log(testMessage.stdErr(`flaky: passed after retry (${attempts} failed attempt${attempts === 1 ? '' : 's'})`))
+    }
+
+    this.log(testMessage.finished(testCase.diagnostic()?.duration ?? 0))
+  }
+
   private log(message: string): void {
     this.logger.console.info(message)
   }
@@ -118,17 +130,6 @@ export class Printer {
       return false
     }
     return ['skip', 'todo'].includes(item.options.mode)
-  }
-
-  private isTestInReportedSuite(testCase: TestCase): boolean {
-    let current: TestCase | TestSuite | TestModule = testCase
-    while (current.type !== 'module') {
-      if (current.type === 'suite' && !this.reportedSuites.has(current.id)) {
-        return false
-      }
-      current = current.parent
-    }
-    return true
   }
 
   private getTestErrors(testCase: TestCase): TestError[] {

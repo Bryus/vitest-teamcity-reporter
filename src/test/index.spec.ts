@@ -68,6 +68,56 @@ describe('main tests', () => {
     generateExpectTest(info, expectMap)
   })
 
+  it('should keep every flow strictly sequenced', async () => {
+    await startTest(['./simple', './sequence-check', './miss-test-result', './retry/passed-after-retry.spec.ts'], {
+      retry: 1,
+    })
+    const { info } = getCalls()
+    expect(consoleStub.info).toHaveBeenCalled()
+
+    const messages = info.map((message) => ({
+      type: /##teamcity\[(\w+) /.exec(message)?.[1] ?? '',
+      flowId: /flowId='(.+?)'/.exec(message)?.[1] ?? '',
+      name: /name='(.+?)'/.exec(message)?.[1] ?? '',
+    }))
+    const flows = new Map<string, { stack: string[]; openTest: string | undefined }>()
+    for (const message of messages) {
+      const flow = flows.get(message.flowId) ?? { stack: [], openTest: undefined }
+      flows.set(message.flowId, flow)
+      switch (message.type) {
+        case 'testSuiteStarted':
+          expect(flow.openTest, `suite ${message.name} opened inside test ${flow.openTest}`).toBeUndefined()
+          flow.stack.push(message.name)
+          break
+        case 'testSuiteFinished':
+          expect(flow.openTest, `suite ${message.name} closed inside test ${flow.openTest}`).toBeUndefined()
+          expect(flow.stack.pop(), `suite ${message.name} closed out of order`).toBe(message.name)
+          break
+        case 'testStarted':
+          expect(flow.openTest, `tests overlap: ${flow.openTest} and ${message.name}`).toBeUndefined()
+          expect(flow.stack.length, `test ${message.name} outside any suite`).toBeGreaterThan(0)
+          flow.openTest = message.name
+          break
+        case 'testFailed':
+        case 'testStdOut':
+        case 'testStdErr':
+          expect(message.name, `${message.type} outside its test`).toBe(flow.openTest)
+          break
+        case 'testFinished':
+          expect(message.name, 'testFinished does not match started test').toBe(flow.openTest)
+          flow.openTest = undefined
+          break
+        case 'testIgnored':
+          expect(flow.openTest, `testIgnored inside open test ${flow.openTest}`).toBeUndefined()
+          break
+      }
+    }
+    flows.forEach((flow, flowId) => {
+      expect(flow.stack, `unclosed suites in ${flowId}`).toEqual([])
+      expect(flow.openTest, `unclosed test in ${flowId}`).toBeUndefined()
+    })
+  })
+
   it('should not emit testFailed when a test passes after retry', async () => {
     await startTest(['./retry/passed-after-retry.spec.ts'], { retry: 1 })
     const { info } = getCalls()

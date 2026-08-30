@@ -1,5 +1,5 @@
 import type { UserConsoleLog } from 'vitest'
-import type { Reporter, TestCase, TestModule, TestSuite, Vitest } from 'vitest/node'
+import type { Reporter, SerializedError, TestModule, TestRunEndReason, Vitest } from 'vitest/node'
 import { Printer } from './printer'
 
 class TeamCityReporter implements Reporter {
@@ -11,28 +11,16 @@ class TeamCityReporter implements Reporter {
     this.printer = new Printer(this.logger)
   }
 
-  onTestModuleCollected(testModule: TestModule): void {
-    this.printer.onModuleCollected(testModule)
-  }
-
-  onTestSuiteReady(testSuite: TestSuite): void {
-    this.printer.onSuiteReady(testSuite)
-  }
-
-  onTestCaseReady(testCase: TestCase): void {
-    this.printer.onTestReady(testCase)
-  }
-
-  onTestCaseResult(testCase: TestCase): void {
-    this.printer.onTestResult(testCase)
-  }
-
-  onTestSuiteResult(testSuite: TestSuite): void {
-    this.printer.onSuiteResult(testSuite)
-  }
-
   onTestModuleEnd(testModule: TestModule): void {
     this.printer.onModuleEnd(testModule)
+  }
+
+  onTestRunEnd(
+    testModules: ReadonlyArray<TestModule>,
+    _unhandledErrors: ReadonlyArray<SerializedError>,
+    _reason: TestRunEndReason,
+  ): void {
+    this.printer.onRunEnd(testModules)
   }
 
   onUserConsoleLog(log: UserConsoleLog): void {
