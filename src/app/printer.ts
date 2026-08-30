@@ -70,10 +70,15 @@ export class Printer {
     const errors = this.getTestErrors(testCase)
     const hasRealErrors = errors.length > 0 && !(errors[0] instanceof MissingResultError)
 
-    if (result.state === 'failed' || hasRealErrors) {
+    if (result.state === 'failed' || (result.state !== 'passed' && hasRealErrors)) {
       errors.forEach((error) => {
         this.log(testMessage.fail(error))
       })
+    } else if (hasRealErrors) {
+      // Passed after retry: the run is green, so emitting testFailed would wrongly
+      // fail the TeamCity build. Keep a trace of the flake in stderr instead.
+      const attempts = errors.length
+      this.log(testMessage.stdErr(`flaky: passed after retry (${attempts} failed attempt${attempts === 1 ? '' : 's'})`))
     }
 
     const diagnostic = testCase.diagnostic()

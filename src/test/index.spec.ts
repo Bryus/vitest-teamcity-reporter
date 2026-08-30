@@ -4,6 +4,7 @@ import { createVitest, type InlineConfig } from 'vitest/node'
 import TeamCityReporter from '../app'
 import missTestWithProblemExpect from './miss-test-result/miss-test-result-with-problem.expect'
 import missTestWithoutProblemExpect from './miss-test-result/miss-test-result-without-problem.expect'
+import passedAfterRetryExpect from './retry/passed-after-retry.expect'
 import sequenceAsyncExpect from './sequence-check/async.expect'
 import sequenceAsyncSecondExpect from './sequence-check/async-2.expect'
 import sequenceSyncExpect from './sequence-check/sync.expect'
@@ -65,5 +66,15 @@ describe('main tests', () => {
       [sequenceSyncExpect[0][1]]: sequenceSyncExpect,
     }
     generateExpectTest(info, expectMap)
+  })
+
+  it('should not emit testFailed when a test passes after retry', async () => {
+    await startTest(['./retry/passed-after-retry.spec.ts'], { retry: 1 })
+    const { info } = getCalls()
+
+    expect(consoleStub.info).toHaveBeenCalled()
+    expect(info.some((message) => message.includes('##teamcity[testFailed '))).toBe(false)
+    expect(info.some((message) => message.includes('flaky: passed after retry (1 failed attempt)'))).toBe(true)
+    compareResultWithExpect(passedAfterRetryExpect, info)
   })
 })
