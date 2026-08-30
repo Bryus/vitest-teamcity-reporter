@@ -15,13 +15,17 @@ describe('main tests', () => {
   // biome-ignore lint/suspicious/noExplicitAny: fine for the test
   let consoleStub: any
 
-  const startTest = async (paths: string[], config: Partial<InlineConfig> = {}): Promise<void> => {
+  const startTest = async (
+    paths: string[],
+    config: Partial<InlineConfig> = {},
+    reporter: TeamCityReporter = new TeamCityReporter(),
+  ): Promise<void> => {
     consoleStub = { info: vi.fn(), log: vi.fn() }
     const vitest = await createVitest('test', {
       ...configDefaults,
       ...config,
       watch: false,
-      reporters: new TeamCityReporter(),
+      reporters: reporter,
     })
     vitest.logger.console = consoleStub as Console
     await vitest.start(paths)
@@ -66,6 +70,16 @@ describe('main tests', () => {
       [sequenceSyncExpect[0][1]]: sequenceSyncExpect,
     }
     generateExpectTest(info, expectMap)
+  })
+
+  it('should wrap every module into the configured root suite', async () => {
+    await startTest(['./simple/work-check.spec.ts'], {}, new TeamCityReporter({ rootSuite: 'Front' }))
+    const { info } = getCalls()
+
+    expect(consoleStub.info).toHaveBeenCalled()
+    expect(info.length).toEqual(workCheckExpect.length + 2)
+    const wrapped = [['testSuiteStarted', 'Front'], ...workCheckExpect, ['testSuiteFinished', 'Front']]
+    compareResultWithExpect(wrapped, info)
   })
 
   it('should keep every flow strictly sequenced', async () => {

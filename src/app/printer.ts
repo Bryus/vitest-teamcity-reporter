@@ -21,7 +21,10 @@ export class Printer {
   private readonly testConsoleMap = new Map<string, UserConsoleLog[]>()
   private readonly flushedModules = new Set<string>()
 
-  constructor(private readonly logger: Vitest['logger']) {}
+  constructor(
+    private readonly logger: Vitest['logger'],
+    private readonly rootSuite?: string,
+  ) {}
 
   public onModuleEnd(testModule: TestModule): void {
     this.flushModule(testModule, true)
@@ -53,12 +56,23 @@ export class Printer {
       return
     }
     this.flushedModules.add(testModule.moduleId)
+    // The root suite must live inside the module's own flow: TeamCity nests
+    // suites per flowId, so a wrapper emitted outside the flow would not
+    // become part of the tests' full names.
+    const rootMessage =
+      this.rootSuite != null ? new SuiteMessage(testModule.moduleId, escapeSpecials(this.rootSuite)) : undefined
+    if (rootMessage) {
+      this.log(rootMessage.started())
+    }
     const suiteMessage = new SuiteMessage(testModule.moduleId, escapeSpecials(testModule.relativeModuleId))
     this.log(suiteMessage.started())
     for (const child of testModule.children) {
       this.render(child, complete)
     }
     this.log(suiteMessage.finished())
+    if (rootMessage) {
+      this.log(rootMessage.finished())
+    }
   }
 
   private render(item: TestCase | TestSuite, complete: boolean): void {
