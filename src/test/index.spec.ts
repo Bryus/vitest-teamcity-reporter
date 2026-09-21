@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { configDefaults } from 'vitest/config'
-import { createVitest, type InlineConfig } from 'vitest/node'
+import { createVitest, type InlineConfig, type Vitest } from 'vitest/node'
 import TeamCityReporter from '../app'
 import missTestWithProblemExpect from './miss-test-result/miss-test-result-with-problem.expect'
 import missTestWithoutProblemExpect from './miss-test-result/miss-test-result-without-problem.expect'
@@ -130,6 +130,55 @@ describe('main tests', () => {
       expect(flow.stack, `unclosed suites in ${flowId}`).toEqual([])
       expect(flow.openTest, `unclosed test in ${flowId}`).toBeUndefined()
     })
+  })
+
+  it('should report an error that belongs to no test', async () => {
+    await startTest(['./unhandled/unhandled-error.spec.ts'])
+    const { info } = getCalls()
+
+    expect(info.some((message) => message.includes('##teamcity[testFailed '))).toBe(false)
+    const error = info.find((message) => message.includes('##teamcity[message ') && message.includes("status='ERROR'"))
+    expect(error, 'the unhandled error is not in the log').toBeDefined()
+    expect(error).toContain('boom after the test')
+    const problem = info.find((message) => message.includes('##teamcity[buildProblem '))
+    expect(problem, 'the build has no problem to show in its status').toBeDefined()
+    expect(problem).toContain('Vitest: 1 unhandled error')
+  })
+
+  it('should leave a clean run without a build problem', async () => {
+    await startTest(['./simple/work-check.spec.ts'])
+    const { info } = getCalls()
+
+    expect(info.some((message) => message.includes('##teamcity[buildProblem '))).toBe(false)
+    expect(info.some((message) => message.includes("status='ERROR'"))).toBe(false)
+  })
+
+  it('should report an interrupted run and unwrap the cause chain', () => {
+    const consoleStub = { info: vi.fn(), log: vi.fn() }
+    const reporter = new TeamCityReporter()
+    reporter.onInit({ logger: { console: consoleStub } } as unknown as Vitest)
+
+    reporter.onTestRunEnd([], [], 'interrupted')
+    expect(consoleStub.info.mock.calls.flat().join('\n')).toContain('the test run was interrupted')
+
+    consoleStub.info.mockClear()
+    reporter.onTestRunEnd(
+      [],
+      [
+        {
+          name: 'Error',
+          message: 'browser connection was closed',
+          stack: 'Error: browser connection was closed\n    at outer',
+          cause: { name: 'Error', message: 'rpc is closed', stack: 'Error: rpc is closed\n    at inner' },
+        },
+      ],
+      'failed',
+    )
+    const messages: string[] = consoleStub.info.mock.calls.flat()
+    expect(messages.join('\n')).toContain('Caused by: Error: rpc is closed')
+    expect(messages.find((message) => message.includes('##teamcity[buildProblem '))).toContain(
+      'Vitest: 1 unhandled error — Error: browser connection was closed',
+    )
   })
 
   it('should not emit testFailed when a test passes after retry', async () => {

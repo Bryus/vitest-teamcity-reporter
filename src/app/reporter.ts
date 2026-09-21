@@ -32,10 +32,10 @@ class TeamCityReporter implements Reporter {
 
   onTestRunEnd(
     testModules: ReadonlyArray<TestModule>,
-    _unhandledErrors: ReadonlyArray<SerializedError>,
-    _reason: TestRunEndReason,
+    unhandledErrors: ReadonlyArray<SerializedError>,
+    reason: TestRunEndReason,
   ): void {
-    this.printer.onRunEnd(testModules)
+    this.printer.onRunEnd(testModules, unhandledErrors, reason)
   }
 
   onUserConsoleLog(log: UserConsoleLog): void {

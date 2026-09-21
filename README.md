@@ -47,5 +47,21 @@ or, without touching the config, via the environment:
 TEAMCITY_ROOT_SUITE=Front vitest run --reporter=vitest-teamcity-reporter
 ```
 
+### Errors outside tests
+
+An unhandled rejection, a crashed worker or anything thrown after its module
+finished belongs to no test. Vitest exits non-zero for those while every test
+stays green, so the build used to fail with nothing in the log but the exit
+code. They are now reported on their own:
+
+```text
+##teamcity[message text='Error: boom after the test' errorDetails='Error: boom after the test|n    at …' status='ERROR']
+##teamcity[buildProblem description='Vitest: 1 unhandled error — Error: boom after the test']
+```
+
+The stack and the whole `cause` chain go into `errorDetails`, and the build
+status text names the first error instead of the bare exit code. A run that was
+interrupted is reported the same way.
+
 ### Reporting Build Statistics
 For enabling "[Reporting Build Statistics](https://www.jetbrains.com/help/teamcity/service-messages.html#Reporting+Build+Statistics)" for TeamCity you may add a "[teamcity](https://istanbul.js.org/docs/advanced/alternative-reporters/#teamcity)" coverage reporter that is the default provided by vitest ([vitest](https://vitest.dev/guide/coverage.html#coverage-setup) doc, [istanbul](https://istanbul.js.org/docs/advanced/alternative-reporters/#teamcity) doc)

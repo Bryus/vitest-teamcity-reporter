@@ -1,10 +1,21 @@
-import type { TestError } from '@vitest/utils'
+import type { SerializedError, TestError } from '@vitest/utils'
 import type { UserConsoleLog } from 'vitest'
-import type { TaskOptions, TestCase, TestModule, TestSuite, Vitest } from 'vitest/node'
+import type { TaskOptions, TestCase, TestModule, TestRunEndReason, TestSuite, Vitest } from 'vitest/node'
+import { detailsOf, headlineOf } from './error/format'
 import MissingResultError from './error/missing-result.error'
 import { escapeSpecials } from './escape'
+import { BuildMessage } from './messages/build-message'
 import { SuiteMessage } from './messages/suite-message'
 import { TestMessage } from './messages/test-message'
+
+/** TeamCity cuts a longer description from its beginning — keep the headline. */
+const MAX_PROBLEM_DESCRIPTION = 1000
+
+const truncate = (description: string): string => {
+  return description.length <= MAX_PROBLEM_DESCRIPTION
+    ? description
+    : `${description.slice(0, MAX_PROBLEM_DESCRIPTION - 1)}…`
+}
 
 /**
  * Renders every test module as one atomic block when the module finishes.
@@ -36,10 +47,15 @@ export class Printer {
    * their finished tests, and fail the ones without a result to point at
    * the place where the run stopped.
    */
-  public onRunEnd(testModules: ReadonlyArray<TestModule>): void {
+  public onRunEnd(
+    testModules: ReadonlyArray<TestModule>,
+    unhandledErrors: ReadonlyArray<SerializedError> = [],
+    reason?: TestRunEndReason,
+  ): void {
     testModules.forEach((testModule) => {
       this.flushModule(testModule, false)
     })
+    this.reportRunFailure(unhandledErrors, reason)
   }
 
   public addTestConsoleLog(id: string, log: UserConsoleLog): void {
@@ -133,6 +149,26 @@ export class Printer {
     }
 
     this.log(testMessage.finished(testCase.diagnostic()?.duration ?? 0))
+  }
+
+  /**
+   * Failures that belong to no test: unhandled rejections, a crashed worker,
+   * anything thrown after its module finished, or an aborted run. Vitest exits
+   * non-zero for them while every test stays green, so without a report the
+   * build fails with nothing in the log but the exit code.
+   */
+  private reportRunFailure(errors: ReadonlyArray<SerializedError>, reason?: TestRunEndReason): void {
+    errors.forEach((error) => {
+      this.log(BuildMessage.error(headlineOf(error), detailsOf(error)))
+    })
+    if (errors.length > 0) {
+      const count = errors.length === 1 ? '1 unhandled error' : `${errors.length} unhandled errors`
+      this.log(BuildMessage.problem(truncate(`Vitest: ${count} — ${headlineOf(errors[0])}`)))
+      return
+    }
+    if (reason === 'interrupted') {
+      this.log(BuildMessage.problem('Vitest: the test run was interrupted'))
+    }
   }
 
   private log(message: string): void {
