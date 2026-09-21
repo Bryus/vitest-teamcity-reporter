@@ -1,0 +1,3 @@
+allowBuilds:
+  # vitest bundles through esbuild; its install script links the platform binary
+  esbuild: true
