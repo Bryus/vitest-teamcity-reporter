@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { configDefaults } from 'vitest/config'
 import { createVitest, type InlineConfig, type Vitest } from 'vitest/node'
 import TeamCityReporter from '../app'
+import { toTeamCityDuration } from '../app/messages/test-message'
 import missTestWithProblemExpect from './miss-test-result/miss-test-result-with-problem.expect'
 import missTestWithoutProblemExpect from './miss-test-result/miss-test-result-without-problem.expect'
 import passedAfterRetryExpect from './retry/passed-after-retry.expect'
@@ -179,6 +180,37 @@ describe('main tests', () => {
     expect(messages.find((message) => message.includes('##teamcity[buildProblem '))).toContain(
       'Vitest: 1 unhandled error — Error: browser connection was closed',
     )
+  })
+
+  it('should report the test duration as whole milliseconds', async () => {
+    await startTest(['./duration/duration.spec.ts', './simple/work-check.spec.ts'])
+    const { info } = getCalls()
+
+    const durations = info
+      .filter((message) => message.includes('##teamcity[testFinished '))
+      .map((message) => /duration='(.*?)'/.exec(message)?.[1])
+    expect(durations.length).toBeGreaterThan(0)
+    durations.forEach((duration) => {
+      expect(duration).toMatch(/^\d+$/)
+    })
+
+    const slow = info.find(
+      (message) =>
+        message.includes('##teamcity[testFinished ') && message.includes("name='should report the time the test took'"),
+    )
+    const duration = Number(/duration='(\d+)'/.exec(slow ?? '')?.[1])
+    expect(duration).toBeGreaterThanOrEqual(50)
+    expect(duration).toBeLessThan(5000)
+  })
+
+  it('should round a fractional duration and clamp invalid ones', () => {
+    expect(toTeamCityDuration(0.7137079999)).toBe(1)
+    expect(toTeamCityDuration(0.4)).toBe(0)
+    expect(toTeamCityDuration(23456.5)).toBe(23457)
+    expect(toTeamCityDuration(0)).toBe(0)
+    expect(toTeamCityDuration(-3)).toBe(0)
+    expect(toTeamCityDuration(Number.NaN)).toBe(0)
+    expect(toTeamCityDuration(Number.POSITIVE_INFINITY)).toBe(0)
   })
 
   it('should not emit testFailed when a test passes after retry', async () => {

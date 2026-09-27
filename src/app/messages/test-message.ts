@@ -2,6 +2,16 @@ import type { TestError } from '@vitest/utils'
 import type { TestCase } from 'vitest/node'
 import { Message, type Parameters } from './message'
 
+/**
+ * TeamCity parses `duration` as an integer number of milliseconds. Vitest
+ * measures with performance.now(), so the value is fractional: TeamCity then
+ * drops it and times the test by the gap between testStarted and testFinished,
+ * which is ~0 ms because every module is rendered in one block.
+ */
+export const toTeamCityDuration = (duration: number): number => {
+  return Number.isFinite(duration) && duration > 0 ? Math.round(duration) : 0
+}
+
 export class TestMessage extends Message {
   constructor(testCase: TestCase) {
     super(testCase.module.moduleId, testCase.name)
@@ -25,7 +35,7 @@ export class TestMessage extends Message {
   }
 
   finished(duration: number): string {
-    return this.generate('testFinished', { duration })
+    return this.generate('testFinished', { duration: toTeamCityDuration(duration) })
   }
 
   ignored(): string {
