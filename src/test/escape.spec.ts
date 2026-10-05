@@ -60,7 +60,7 @@ describe('Checking message escaping functionality', () => {
       },
     } as unknown as TestCase
 
-    const test = new TestMessage(testCase)
+    const test = TestMessage.of(testCase)
 
     const escapedMessage = test.started()
     expect(escapedMessage).toStrictEqual(`##teamcity[testStarted flowId='${fileId}' name='${expectedString}']`)

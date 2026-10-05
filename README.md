@@ -63,5 +63,22 @@ The stack and the whole `cause` chain go into `errorDetails`, and the build
 status text names the first error instead of the bare exit code. A run that was
 interrupted is reported the same way.
 
+### Module and suite errors
+
+Errors of a module or a suite reach TeamCity through the tests they fail. When
+there is no such test — the file threw while importing (a missing global, a
+broken import), or `afterAll` threw after every test of its suite had passed —
+the error is reported as a synthetic failed test inside that module or suite:
+
+```text
+##teamcity[testStarted name='(module error)' flowId='…']
+##teamcity[testFailed name='(module error)' message='__APP_VERSION__ is not defined' details='ReferenceError: …' flowId='…']
+##teamcity[testFinished name='(module error)' duration='0' flowId='…']
+```
+
+A suite gets a `(suite error)` test the same way. Errors already reported
+through real tests (a failed `beforeAll` fails each of its tests) are not
+repeated.
+
 ### Reporting Build Statistics
 For enabling "[Reporting Build Statistics](https://www.jetbrains.com/help/teamcity/service-messages.html#Reporting+Build+Statistics)" for TeamCity you may add a "[teamcity](https://istanbul.js.org/docs/advanced/alternative-reporters/#teamcity)" coverage reporter that is the default provided by vitest ([vitest](https://vitest.dev/guide/coverage.html#coverage-setup) doc, [istanbul](https://istanbul.js.org/docs/advanced/alternative-reporters/#teamcity) doc)

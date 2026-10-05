@@ -11,6 +11,14 @@ import { TestMessage } from './messages/test-message'
 /** TeamCity cuts a longer description from its beginning — keep the headline. */
 const MAX_PROBLEM_DESCRIPTION = 1000
 
+/**
+ * Names of the synthetic tests that carry errors no real test reported:
+ * a module that failed to import has no tests at all, and a failing
+ * afterAll leaves every test of its suite green.
+ */
+export const MODULE_ERROR_TEST = '(module error)'
+export const SUITE_ERROR_TEST = '(suite error)'
+
 const truncate = (description: string): string => {
   return description.length <= MAX_PROBLEM_DESCRIPTION
     ? description
@@ -31,6 +39,8 @@ const truncate = (description: string): string => {
 export class Printer {
   private readonly testConsoleMap = new Map<string, UserConsoleLog[]>()
   private readonly flushedModules = new Set<string>()
+  /** Errors already sent as testFailed of some test — not to be reported twice. */
+  private readonly reportedErrors = new WeakSet<object>()
 
   constructor(
     private readonly logger: Vitest['logger'],
@@ -85,6 +95,7 @@ export class Printer {
     for (const child of testModule.children) {
       this.render(child, complete)
     }
+    this.renderUnreportedErrors(testModule.moduleId, MODULE_ERROR_TEST, testModule.errors())
     this.log(suiteMessage.finished())
     if (rootMessage) {
       this.log(rootMessage.finished())
@@ -101,14 +112,35 @@ export class Printer {
       for (const child of item.children) {
         this.render(child, complete)
       }
+      this.renderUnreportedErrors(item.module.moduleId, SUITE_ERROR_TEST, item.errors())
       this.log(suiteMessage.finished())
       return
     }
     this.renderTest(item, complete)
   }
 
+  /**
+   * Module and suite errors reach TeamCity only through the tests they fail.
+   * Without such a test — the file threw while importing, or afterAll threw
+   * after every test passed — vitest exits non-zero while TeamCity shows only
+   * passed tests. A synthetic failed test keeps the error and its location.
+   */
+  private renderUnreportedErrors(flowId: string, name: string, errors: ReadonlyArray<TestError>): void {
+    const unreported = errors.filter((error) => !this.reportedErrors.has(error))
+    if (unreported.length === 0) {
+      return
+    }
+    const testMessage = new TestMessage(flowId, name)
+    this.log(testMessage.started())
+    unreported.forEach((error) => {
+      this.reportedErrors.add(error)
+      this.log(testMessage.fail(error))
+    })
+    this.log(testMessage.finished(0))
+  }
+
   private renderTest(testCase: TestCase, complete: boolean): void {
-    const testMessage = new TestMessage(testCase)
+    const testMessage = TestMessage.of(testCase)
     const result = testCase.result()
 
     if (this.isSkippedOrTodo(testCase)) {
@@ -139,6 +171,7 @@ export class Printer {
       this.log(testMessage.fail(new MissingResultError(testCase)))
     } else if (result.state === 'failed' || (result.state !== 'passed' && hasRealErrors)) {
       errors.forEach((error) => {
+        this.reportedErrors.add(error)
         this.log(testMessage.fail(error))
       })
     } else if (hasRealErrors) {

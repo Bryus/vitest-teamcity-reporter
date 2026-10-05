@@ -13,8 +13,8 @@ export const toTeamCityDuration = (duration: number): number => {
 }
 
 export class TestMessage extends Message {
-  constructor(testCase: TestCase) {
-    super(testCase.module.moduleId, testCase.name)
+  static of(testCase: TestCase): TestMessage {
+    return new TestMessage(testCase.module.moduleId, testCase.name)
   }
 
   protected generate(type: string, parameters: Parameters = {}): string {

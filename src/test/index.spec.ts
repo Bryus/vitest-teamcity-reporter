@@ -3,6 +3,7 @@ import { configDefaults } from 'vitest/config'
 import { createVitest, type InlineConfig, type Vitest } from 'vitest/node'
 import TeamCityReporter from '../app'
 import { toTeamCityDuration } from '../app/messages/test-message'
+import { MODULE_ERROR_TEST, SUITE_ERROR_TEST } from '../app/printer'
 import missTestWithProblemExpect from './miss-test-result/miss-test-result-with-problem.expect'
 import missTestWithoutProblemExpect from './miss-test-result/miss-test-result-without-problem.expect'
 import passedAfterRetryExpect from './retry/passed-after-retry.expect'
@@ -84,9 +85,12 @@ describe('main tests', () => {
   })
 
   it('should keep every flow strictly sequenced', async () => {
-    await startTest(['./simple', './sequence-check', './miss-test-result', './retry/passed-after-retry.spec.ts'], {
-      retry: 1,
-    })
+    await startTest(
+      ['./simple', './sequence-check', './miss-test-result', './retry/passed-after-retry.spec.ts', './module-error'],
+      {
+        retry: 1,
+      },
+    )
     const { info } = getCalls()
     expect(consoleStub.info).toHaveBeenCalled()
 
@@ -144,6 +148,41 @@ describe('main tests', () => {
     const problem = info.find((message) => message.includes('##teamcity[buildProblem '))
     expect(problem, 'the build has no problem to show in its status').toBeDefined()
     expect(problem).toContain('Vitest: 1 unhandled error')
+  })
+
+  it('should fail a module that threw while importing', async () => {
+    await startTest(['./module-error/import-failure.spec.ts'])
+    const { info } = getCalls()
+
+    const failed = info.filter((message) => message.includes('##teamcity[testFailed '))
+    expect(failed, 'the import failure is not reported as a failed test').toHaveLength(1)
+    expect(failed[0]).toContain(`name='${MODULE_ERROR_TEST}'`)
+    expect(failed[0]).toContain('__NOT_DEFINED__ is not defined')
+    const sequence = info.map((message) => /##teamcity\[(\w+) /.exec(message)?.[1])
+    expect(sequence).toEqual(['testSuiteStarted', 'testStarted', 'testFailed', 'testFinished', 'testSuiteFinished'])
+  })
+
+  it('should fail a suite whose afterAll threw after its tests passed', async () => {
+    await startTest(['./module-error/after-all-failure.spec.ts'])
+    const { info } = getCalls()
+
+    const failed = info.filter((message) => message.includes('##teamcity[testFailed '))
+    expect(failed).toHaveLength(1)
+    expect(failed[0]).toContain(`name='${SUITE_ERROR_TEST}'`)
+    expect(failed[0]).toContain('cleanup failed')
+    const passed = info.find(
+      (message) =>
+        message.includes('##teamcity[testFinished ') && message.includes("name='should pass before the cleanup fails'"),
+    )
+    expect(passed, 'the real test must stay passed').toBeDefined()
+  })
+
+  it('should not repeat a hook error already reported through its tests', async () => {
+    await startTest(['./miss-test-result'])
+    const { info } = getCalls()
+
+    expect(info.some((message) => message.includes(`name='${SUITE_ERROR_TEST}'`))).toBe(false)
+    expect(info.some((message) => message.includes(`name='${MODULE_ERROR_TEST}'`))).toBe(false)
   })
 
   it('should leave a clean run without a build problem', async () => {
